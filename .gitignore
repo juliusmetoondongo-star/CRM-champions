@@ -2,3 +2,18 @@ node_modules
 dist
 .env
 .DS_Store
+
+# Supabase
+supabase/.temp
+supabase/.branches
+supabase/.config
+
+# Supabase
+supabase/.temp
+supabase/.branches
+supabase/.config
+
+# Supabase (cache local)
+champions-academy/supabase/.temp
+champions-academy/supabase/.branches
+champions-academy/supabase/.config
