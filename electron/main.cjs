@@ -12,16 +12,8 @@ function createWindow() {
     },
   });
 
-  win.loadFile(path.join(__dirname, "../dist/index.html"));
+  // dist du projet Vite dans le sous-dossier
+  win.loadFile(path.join(__dirname, "../champions-academy/dist/index.html"));
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+app.whenReady().then(() => createWindow());
