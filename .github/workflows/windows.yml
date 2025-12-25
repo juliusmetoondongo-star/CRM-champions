@@ -17,16 +17,28 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
+      # 1) deps racine (electron-builder, electron, etc.)
+      - name: Install root dependencies
         run: npm ci
 
-      - name: Build installer
-        run: npm run electron:build
+      # 2) build Vite dans le sous-dossier (là où est index.html)
+      - name: Install frontend dependencies
+        working-directory: champions-academy
+        run: npm ci
+
+      - name: Build frontend (Vite)
+        working-directory: champions-academy
+        run: npm run build
+
+      # 3) package Electron (utilise champions-academy/dist)
+      - name: Package Windows installer
+        run: npx electron-builder --win
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
           path: |
+            dist/**/*
             **/*.exe
             **/*.msi
