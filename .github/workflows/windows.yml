@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -16,28 +17,29 @@ jobs:
           node-version: 20
           cache: npm
 
-      # Dépendances Electron (racine)
+      # 1️⃣ Dépendances racine (Electron / electron-builder)
       - name: Install root dependencies
         run: npm ci
 
-      # Build Vite dans le sous-dossier (là où est le vrai projet)
+      # 2️⃣ Dépendances FRONTEND (le bon dossier)
       - name: Install frontend dependencies
-        working-directory: champions-academy
+        working-directory: frontend
         run: npm ci
 
+      # 3️⃣ Build Vite (frontend/dist)
       - name: Build frontend
-        working-directory: champions-academy
+        working-directory: frontend
         run: npm run build
 
-      # Packaging Windows (NSIS)
+      # 4️⃣ Packaging Windows
       - name: Package Windows installer
         run: npx electron-builder --win
 
+      # 5️⃣ Upload Setup.exe
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
           path: |
-            dist/**/*
             **/*.exe
             **/*.msi
