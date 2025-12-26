@@ -1,0 +1,546 @@
+import { supabase } from "./supabaseClient";
+
+/**
+ * Centralized Supabase queries for Champion's Academy CRM
+ */
+
+// ==================== DASHBOARD QUERIES ====================
+
+/**
+ * Get Dashboard KPIs using optimized view
+ */
+export async function getDashboardKPIs() {
+  try {
+    // Try to use the view first (faster)
+    const { data: viewData, error: viewError } = await supabase
+      .from("v_dashboard_kpis")
+      .select("*")
+      .maybeSingle();
+
+    if (viewData && !viewError) {
+      return {
+        activeMembers: Number(viewData.active_members) || 0,
+        checkinsToday: Number(viewData.checkins_today) || 0,
+        revenueMonthEur: Number(viewData.revenue_month) || 0,
+        amountDueEur: Number(viewData.amount_due) || 0,
+        membersWithDebt: Number(viewData.members_with_debt) || 0,
+      };
+    }
+
+    // Fallback to individual queries if view doesn't exist
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayISO = today.toISOString();
+
+    const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const firstDayOfMonthISO = firstDayOfMonth.toISOString();
+
+    // Active members from member_subscription_info
+    const { count: activeMembers } = await supabase
+      .from("member_subscription_info")
+      .select("*", { count: "exact", head: true })
+      .eq("is_active", true);
+
+    // Check-ins today
+    const { count: checkinsToday } = await supabase
+      .from("checkins")
+      .select("*", { count: "exact", head: true })
+      .gte("scanned_at", todayISO);
+
+    // Revenue this month
+    const { data: paymentsData } = await supabase
+      .from("payments")
+      .select("amount_cents")
+      .eq("status", "completed")
+      .gte("paid_at", firstDayOfMonthISO);
+
+    const revenueMonth =
+      paymentsData?.reduce((sum, p) => sum + (p.amount_cents || 0), 0) || 0;
+
+    // Amount due
+    const { data: dueData } = await supabase
+      .from("member_subscription_info")
+      .select("amount_due")
+      .gt("amount_due", 0);
+
+    const amountDue =
+      dueData?.reduce((sum, d) => sum + Number(d.amount_due || 0), 0) || 0;
+
+    return {
+      activeMembers: activeMembers || 0,
+      checkinsToday: checkinsToday || 0,
+      revenueMonthEur: revenueMonth / 100,
+      amountDueEur: amountDue,
+      membersWithDebt: dueData?.length || 0,
+    };
+  } catch (error) {
+    console.error("Error fetching dashboard KPIs:", error);
+    throw error;
+  }
+}
+
+/**
+ * Get check-ins for last 30 days (aggregated by day)
+ */
+export async function getCheckins30Days() {
+  try {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const { data, error } = await supabase
+      .from("checkins")
+      .select("scanned_at")
+      .gte("scanned_at", thirtyDaysAgo.toISOString())
+      .order("scanned_at", { ascending: true });
+
+    if (error) throw error;
+
+    // Aggregate by day
+    const counts: Record<string, number> = {};
+    data?.forEach((checkin) => {
+      const date = new Date(checkin.scanned_at).toISOString().split("T")[0];
+      counts[date] = (counts[date] || 0) + 1;
+    });
+
+    return Object.entries(counts)
+      .map(([date, count]) => ({
+        label: new Date(date).toLocaleDateString("fr-FR", {
+          day: "2-digit",
+          month: "2-digit",
+        }),
+        value: count,
+      }))
+      .slice(-30);
+  } catch (error) {
+    console.error("Error fetching check-ins:", error);
+    return [];
+  }
+}
+
+/**
+ * Get revenue for last 12 months (aggregated by month)
+ */
+export async function getRevenue12Months() {
+  try {
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+
+    const { data, error } = await supabase
+      .from("payments")
+      .select("paid_at, amount_cents")
+      .eq("status", "completed")
+      .gte("paid_at", twelveMonthsAgo.toISOString())
+      .order("paid_at", { ascending: true });
+
+    if (error) throw error;
+
+    // Aggregate by month
+    const counts: Record<string, number> = {};
+    data?.forEach((payment) => {
+      const date = new Date(payment.paid_at || "");
+      const monthKey = `${date.getFullYear()}-${String(
+        date.getMonth() + 1
+      ).padStart(2, "0")}`;
+      counts[monthKey] =
+        (counts[monthKey] || 0) + (payment.amount_cents || 0) / 100;
+    });
+
+    return Object.entries(counts)
+      .map(([month, value]) => ({
+        month: new Date(month + "-01").toLocaleDateString("fr-FR", {
+          month: "short",
+          year: "2-digit",
+        }),
+        value: Math.round(value),
+      }))
+      .slice(-12);
+  } catch (error) {
+    console.error("Error fetching revenue:", error);
+    return [];
+  }
+}
+
+/**
+ * Get active members by discipline using optimized view
+ */
+export async function getActiveMembersByDiscipline() {
+  try {
+    // Try to use the view first (faster)
+    const { data: viewData, error: viewError } = await supabase
+      .from("v_active_members_by_discipline")
+      .select("*");
+
+    if (viewData && !viewError && viewData.length > 0) {
+      return viewData.map((item: any) => ({
+        name: item.discipline || "Non définie",
+        value: Number(item.member_count) || 0,
+        key: (item.discipline || "non-definie").toLowerCase().replace(/\s+/g, "-"),
+      }));
+    }
+
+    // Fallback to direct query
+    const { data, error } = await supabase
+      .from("member_subscription_info")
+      .select("discipline")
+      .eq("is_active", true);
+
+    if (error) throw error;
+
+    // Aggregate by discipline
+    const counts: Record<string, number> = {};
+    data?.forEach((item) => {
+      const discipline = item.discipline || "Non définie";
+      counts[discipline] = (counts[discipline] || 0) + 1;
+    });
+
+    return Object.entries(counts).map(([name, value]) => ({
+      name,
+      value,
+      key: name.toLowerCase().replace(/\s+/g, "-"),
+    }));
+  } catch (error) {
+    console.error("Error fetching members by discipline:", error);
+    return [];
+  }
+}
+
+// ==================== MEMBERS QUERIES ====================
+
+/**
+ * Get all members with their subscription info
+ */
+export async function getAllMembers() {
+  try {
+    const { data, error } = await supabase
+      .from("members")
+      .select(
+        `
+        id,
+        member_code,
+        first_name,
+        last_name,
+        full_name,
+        email,
+        phone,
+        card_uid,
+        discipline,
+        status,
+        last_scan_at,
+        is_competitor,
+        created_at
+      `
+      )
+      .order("last_scan_at", { ascending: false, nullsFirst: false });
+
+    if (error) throw error;
+
+    // Get subscription info for each member
+    const memberCodes = data?.map((m) => m.member_code) || [];
+    const { data: subsData } = await supabase
+      .from("member_subscription_info")
+      .select("*")
+      .in("member_code", memberCodes);
+
+    // Merge data
+    const subsMap = new Map(
+      subsData?.map((s) => [s.member_code, s]) || []
+    );
+
+    return data?.map((member) => {
+      const subInfo = subsMap.get(member.member_code);
+      return {
+        ...member,
+        subscription_status: subInfo?.member_status || "unknown",
+        is_subscription_active: subInfo?.is_active || false,
+        amount_due: subInfo?.amount_due || 0,
+        valid_from: subInfo?.valid_from,
+        valid_to: subInfo?.valid_to,
+      };
+    });
+  } catch (error) {
+    console.error("Error fetching members:", error);
+    throw error;
+  }
+}
+
+/**
+ * Get member by ID with subscription info
+ */
+export async function getMemberById(memberId: string) {
+  try {
+    const { data: member, error } = await supabase
+      .from("members")
+      .select("*")
+      .eq("id", memberId)
+      .single();
+
+    if (error) throw error;
+
+    // Get subscription info
+    const { data: subInfo } = await supabase
+      .from("member_subscription_info")
+      .select("*")
+      .eq("member_code", member.member_code)
+      .maybeSingle();
+
+    return {
+      ...member,
+      subscription_info: subInfo,
+    };
+  } catch (error) {
+    console.error("Error fetching member:", error);
+    throw error;
+  }
+}
+
+// ==================== SUBSCRIPTIONS QUERIES ====================
+
+/**
+ * Get all subscriptions with member details
+ */
+export async function getAllSubscriptions() {
+  try {
+    const { data, error } = await supabase
+      .from("member_subscription_info")
+      .select("*")
+      .order("valid_to", { ascending: false, nullsFirst: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error("Error fetching subscriptions:", error);
+    throw error;
+  }
+}
+
+// ==================== PAYMENTS QUERIES ====================
+
+/**
+ * Get all payments with member details
+ */
+export async function getAllPayments() {
+  try {
+    const { data, error } = await supabase
+      .from("payments")
+      .select(
+        `
+        *,
+        members!inner (
+          member_code,
+          first_name,
+          last_name,
+          full_name,
+          discipline
+        )
+      `
+      )
+      .order("paid_at", { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error("Error fetching payments:", error);
+    throw error;
+  }
+}
+
+/**
+ * Get payments summary for accounting
+ */
+export async function getPaymentsSummary(
+  startDate?: Date,
+  endDate?: Date
+) {
+  try {
+    let query = supabase
+      .from("payments")
+      .select("amount_cents, method, paid_at, category")
+      .eq("status", "completed");
+
+    if (startDate) {
+      query = query.gte("paid_at", startDate.toISOString());
+    }
+    if (endDate) {
+      query = query.lte("paid_at", endDate.toISOString());
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    // Aggregate by method
+    const byMethod: Record<string, number> = {};
+    let total = 0;
+
+    data?.forEach((payment) => {
+      const amount = (payment.amount_cents || 0) / 100;
+      const method = payment.method || "unknown";
+      byMethod[method] = (byMethod[method] || 0) + amount;
+      total += amount;
+    });
+
+    return {
+      total,
+      byMethod: Object.entries(byMethod).map(([method, amount]) => ({
+        method,
+        amount,
+      })),
+      count: data?.length || 0,
+    };
+  } catch (error) {
+    console.error("Error fetching payments summary:", error);
+    throw error;
+  }
+}
+
+// ==================== CHECKINS QUERIES ====================
+
+/**
+ * Get recent check-ins with member details
+ */
+export async function getRecentCheckins(limitDays: number = 1) {
+  try {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - limitDays);
+    startDate.setHours(0, 0, 0, 0);
+
+    const { data, error } = await supabase
+      .from("checkins")
+      .select(
+        `
+        *,
+        members!inner (
+          member_code,
+          first_name,
+          last_name,
+          full_name,
+          discipline
+        )
+      `
+      )
+      .gte("scanned_at", startDate.toISOString())
+      .order("scanned_at", { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error("Error fetching check-ins:", error);
+    throw error;
+  }
+}
+
+/**
+ * Create a check-in for a member
+ */
+export async function createCheckin(
+  memberIdOrCode: string,
+  source: string = "rfid",
+  location: string = "Ixelles"
+) {
+  try {
+    // Try to find member by card_uid first, then by member_code, then by ID
+    let member;
+
+    const { data: byCard } = await supabase
+      .from("members")
+      .select("id, member_code, full_name")
+      .eq("card_uid", memberIdOrCode)
+      .maybeSingle();
+
+    if (byCard) {
+      member = byCard;
+    } else {
+      const { data: byCode } = await supabase
+        .from("members")
+        .select("id, member_code, full_name")
+        .eq("member_code", memberIdOrCode)
+        .maybeSingle();
+
+      if (byCode) {
+        member = byCode;
+      } else {
+        const { data: byId } = await supabase
+          .from("members")
+          .select("id, member_code, full_name")
+          .eq("id", memberIdOrCode)
+          .maybeSingle();
+
+        member = byId;
+      }
+    }
+
+    if (!member) {
+      throw new Error("Membre introuvable");
+    }
+
+    // Create check-in
+    const { data, error } = await supabase
+      .from("checkins")
+      .insert({
+        member_id: member.id,
+        scanned_at: new Date().toISOString(),
+        source,
+        location,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // Update last_scan_at in members table
+    await supabase
+      .from("members")
+      .update({ last_scan_at: new Date().toISOString() })
+      .eq("id", member.id);
+
+    return { checkin: data, member };
+  } catch (error) {
+    console.error("Error creating check-in:", error);
+    throw error;
+  }
+}
+
+// ==================== AUDIT LOGS QUERIES ====================
+
+/**
+ * Get recent audit logs
+ */
+export async function getAuditLogs(limit: number = 100) {
+  try {
+    const { data, error } = await supabase
+      .from("audit_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error("Error fetching audit logs:", error);
+    throw error;
+  }
+}
+
+/**
+ * Create an audit log entry
+ */
+export async function createAuditLog(
+  actor: string,
+  action: string,
+  entity: string,
+  entityId?: string,
+  meta?: Record<string, any>
+) {
+  try {
+    const { error } = await supabase.from("audit_logs").insert({
+      actor,
+      action,
+      entity,
+      entity_id: entityId,
+      meta: meta || {},
+    });
+
+    if (error) throw error;
+  } catch (error) {
+    console.error("Error creating audit log:", error);
+  }
+}

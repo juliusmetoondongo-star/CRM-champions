@@ -1,0 +1,13 @@
+{
+  "name": "champions-crm",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-packager . ChampionsCRM --platform=win32 --arch=x64 --icon=public/icon.png --out=dist --overwrite"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-packager": "^17.1.2"
+  }
+}
