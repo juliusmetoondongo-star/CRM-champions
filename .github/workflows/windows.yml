@@ -3,6 +3,8 @@ name: Build Windows Installer (Electron)
 on:
   push:
     branches: [ "main" ]
+    tags:
+      - "v*.*.*"          # déclenche aussi sur tags (v1.0.0, v1.0.1, etc.)
   workflow_dispatch:
 
 jobs:
@@ -10,9 +12,11 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
@@ -21,25 +25,30 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
-      # 2️⃣ Dépendances FRONTEND (le bon dossier)
+      # 2️⃣ Dépendances FRONTEND (Vite / React)
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
 
-      # 3️⃣ Build Vite (frontend/dist)
+      # 3️⃣ Build frontend (Vite → frontend/dist)
       - name: Build frontend
         working-directory: frontend
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
 
-      # 4️⃣ Packaging Windows
+      # 4️⃣ Packaging + Release GitHub (Option 2)
       - name: Package Windows installer
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npx electron-builder --win
 
-      # 5️⃣ Upload Setup.exe
-      - name: Upload installer
+      # 5️⃣ Upload artifact (en plus de la release)
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
           path: |
-            **/*.exe
-            **/*.msi
+            dist/**/*.exe
+            dist/**/*.msi
